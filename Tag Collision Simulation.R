@@ -9,7 +9,7 @@
 
 #### Clearning Workspace and setting directory ---------
 rm(list=ls()) # Clear workspace
-setwd('/Users/stephenscherrer/Documents/Work/UH/Projects/dissertation work/Acoustic Network Design/Collision Simulation/')
+setwd('/Users/stephenscherrer/Documents/Work/UH/Projects/dissertation work/Acoustic Network Design/Collison-Simulation/')
 
 #### Importing principle dependencies ------------------
 #install.packages('plyr')
@@ -32,15 +32,43 @@ library('dplyr') # functions: between
     transmission_length = 2.8 #seconds
   ## Blanking Interval - period of time the VR2W receiver unit shuts down to detection of other tags
     blanking_interval = 260 # milliseconds
+  ## Supression factor - a value out of 1 for which a tag has a probability of interfeering with the detction of other tags
+    ## tags with a higher probability of detection have a higher supression value while tags farther from the receiver have 
+    ## a lower supression value. Supression factor must be a factor of n_tags. 
+    ## When determining supression values for a tag or set of tags, use a ratio from a range test equivilant to
+    ##    Return rate of tag in similar condition / maximum return rate of test
+    supression_factor = .2
 
 #### Functions ------------------------------------------
-  simulate_transmission_array = function(n_iterations, n_tags, 
+test_supression_factor = function(supression_factor = supression_factor, n_tags = n_tags){
+  ## A test of the supression factor. supression factor must be an integer, in which case it
+    ## is constant for all tags, or a vector of a length which is a factor of the 
+    ## total number of tags. 
+  if(n_tags %% length(supression_factor) != 0){
+    print('supression_factor must be an vector of a length which is a factor of n_tags')
+  }
+  for (i in 1:length(supression_factor)){
+    if (supression_factor[i] >1 | supression_factor[i] < 0){
+      print('Values of supression_factor must be < 1')
+    }
+  }
+}
+
+generate_number_of_samples = function(transmission_distribution){
+  ## generate a number equivilant to the total amount of transmissions each 
+    ## tag will be sampled
+  n_samples = (60*60*24) / mean(transmission_distribution)
+  return(n_samples)
+}
+
+simulate_transmission_array = function(n_tags, 
                             transmission_interval, 
                             transmission_length,
-                            blanking_interval){
+                            blanking_interval,
+                            n_samples = generate_number_of_samples(transmission_distribution)){
     # Builds array of simulated transmission times for each tag. Each row is a tag
       # Frame 1 is begining time of transmission, Frame 2 is after blanking period
-    n_samples = (60*60*24)/mean(transmission_distribution)
+    # n_samples = (60*60*24)/mean(transmission_distribution)
     transmission_array = array(0, c(n_tags, n_samples, 2)) # First frame of array is start of transmission, second frame is end
     transmission_array[ ,1, 1] = sample(x = transmission_distribution, 
                                size = n_tags, replace = TRUE)
@@ -54,49 +82,124 @@ library('dplyr') # functions: between
     return (transmission_array)
   }
 
-test_collisions = function(transmission_array){
-  ## Takes a transmission array dimensions (n_tags, n_iterations, 2) and tests
-    ## against other transmission ranges for collisions
-  all_detections = uncolided_detections = length(unique(transmission_array[ , ,1]))
-  start_transmissions_vec = as.vector(unlist(
-    alply(.data = transmission_array[ , ,1],
-          .margins = c(1,2))))
-  transmission_list = as.list(alply(.data = transmission_array, 
-                                    .margins = c(1,2)))
-  for (i in 1:length(transmission_list)){
-    # subtracting the number of tranmsissions that begin during another tranmsision interval
-      # have to add one becaue a transmission will test true with itself, but does not preclude
-      # interfeer with itself
-    uncolided_detections = (uncolided_detections 
-                            - length(start_transmissions_vec[
-                              between(start_transmissions_vec, 
-                                      left = transmission_list[[i]][1], 
-                                      right = transmission_list[[i]][2])]) 
-                            + 1) # add one becaue a transmission will test true 
-    # with itself, but does not interfeer with itself
+convert_array_to_df = function(transmission_array){
+  sim_tag_id = 1:length(transmission_array[ ,1,1])
+  transmission_mat = matrix(0,0,3)
+  for (j in 1:length(transmission_array[1, ,1])){
+    transmission_mat = rbind(transmission_mat, cbind(sim_tag_id, 
+                                                     transmission_array[ ,j,1], 
+                                                     transmission_array[ ,j,2]))
   }
-  fraction_of_transmissions_returned = uncolided_detections/all_detections
-  return(fraction_of_transmissions_returned)
+  transmission_df = as.data.frame(transmission_mat)
+  colnames(transmission_df) = c('tag_no', 'start_transmission', 'end_transmission')
+  return(transmission_df)
 }
+
+bind_supression_factor = function(transmission_df, supression_factor){
+  transmission_df$supression_factor = rep(supression_factor, length(transmission_df$tag_no) / length(supression_factor))
+  return(transmission_df)
+}
+
+simulate_collisions = function(transmission_df){
+  ## takes a df of four columns (tag_no, start_transmission, end_transmision, supression_factor)
+    ## and compares start of all trasmission iteratively to start-end range of all transmissions.
+    ## if there is overlap, 
+  collisions = as.data.frame(matrix(0,0,3))
+  for (i in 1:length(transmission_df$start_transmission)){
+    tag_tested  = which(between(as.vector(transmission_df$start_transmission), 
+                                left  = transmission_df$start_transmission[i], 
+                                right = transmission_df$end_transmission[i]))
+    collisions  = rbind(collisions, cbind(transmission_df$tag_no[tag_tested], 
+                                            transmission_df$tag_no[i],
+                                            transmission_df$supression_factor[i]))
+      }
+    ## Removing tags that report colliding with themselves. This is an artifact of
+      ## how between function evaluates, but not a real world possibility
+    collisions = collisions[which(collisions[ ,1] != collisions[ ,2]), ]
+    colnames(collisions) = c('tested_tag', 'tag_collided' ,'collided_supression')
+  return(collisions)
+}
+
+supress_collisions = function(collisions_df){
+  ## For modeling cases where a colliding tag's transmission was not detected by a
+    ## receiver, for instance if the tag was sufficient distance away that not all
+    ## transmissions would be detected. 
+    ## Randomly generates a number between 0 and 1 from a uniform distribution for 
+    ## each collision. If randomly generated number is greater than that detection's 
+    ## supression factor, the interfeering tag is said to have been undetected and 
+    ## collision is said to have not occurred, that is, it is removed from the list
+    ## of collisions
+  collisions_supression_test = collisions_df[(which(!(runif(n = length(collisions_df$collided_supression), min = 0, max = 1) > collisions_df$collided_supression))), ]
+  return(collisions_supression_test)
+}
+  
+generate_return_rates = function(transmission_df, collisions_supressed_df){
+  ## function to determine individual return rates for each tag relative to the 
+    ## number of collisions that it incurred by other transmission sources that 
+    ## were above the supression threshold. 
+  indv_return_rate = rep(0, length(unique(transmission_df$tag_no)))
+  for (i  in 1:length(unique(transmission_df$tag_no))){
+    indv_return_rate[i] = (length(which(transmission_df$tag_no == i)) - length(which(collisions_supressed_df$tested_tag == i))) / length(which(transmission_df$tag_no == i))
+  }
+  return (indv_return_rate)
+}
+
+# 
+# test_collisions = function(transmission_array){
+#   ## Takes a transmission array dimensions (n_tags, n_iterations, 2) and tests
+#     ## against other transmission ranges for collisions
+#   all_detections = uncolided_detections = length(unique(transmission_array[ , ,1]))
+#   start_transmissions_vec = as.vector(unlist(
+#     alply(.data = transmission_array[ , ,1],
+#           .margins = c(1,2))))
+#   transmission_list = as.list(alply(.data = transmission_array, 
+#                                     .margins = c(1,2)))
+#   for (i in 1:length(transmission_list)){
+#     # subtracting the number of tranmsissions that begin during another tranmsision interval
+#       # have to add one becaue a transmission will test true with itself, but does not preclude
+#       # interfeer with itself
+#     uncolided_detections = (uncolided_detections 
+#                             - length(start_transmissions_vec[
+#                               between(start_transmissions_vec, 
+#                                       left = transmission_list[[i]][1], 
+#                                       right = transmission_list[[i]][2])]) 
+#                             + 1) # add one becaue a transmission will test true 
+#     # with itself, but does not interfeer with itself
+#   }
+#   fraction_of_transmissions_returned = uncolided_detections/all_detections
+#   return(fraction_of_transmissions_returned)
+# }
 
 run_simulation = function(n_iterations, n_tags, 
                           transmission_interval, 
                           transmission_length,
-                          blanking_interval){
-  recovery_rate = rep(0, n_iterations)
-  for (i in 1:length(recovery_rate)){
-    recovery_rate[i] = test_collisions(simulate_transmission_array(
-      n_iterations, n_tags, 
-      transmission_interval, 
-      transmission_length,
-      blanking_interval))
+                          blanking_interval,
+                          transmission_distribution){
+  run_timer = proc.time()
+  n_samples = generate_number_of_samples(transmission_distribution)
+  pooled_return_rates = c()
+  for (i in 1:length(n_iterations)){
+    itterate_array = simulate_transmission_array(n_tags, 
+                                transmission_interval, 
+                                transmission_length,
+                                blanking_interval)
+    itterate_df = convert_array_to_df(itterate_array)
+    itterate_df_with_supression_factor = bind_supression_factor(itterate_df, supression_factor)
+    collide_transmissions = simulate_collisions(itterate_df_with_supression_factor)
+    collisions_supressed = supress_collisions(collide_transmissions)
+    indv_return_rates = generate_return_rates(itterate_df_with_supression_factor, collisions_supressed)
+    pooled_return_rates = rbind(indv_return_rates)
   }
-  print(fivenum(recovery_rate))
-  return(recovery_rate)
+  mean_return_rates = colMeans(pooled_return_rates)
+  proc.time() - run_timer
+  print(run_timer)
+  return(mean_return_rates)
 }
 
 #### Usage ----------------------------------------
 test_run = run_simulation(n_iterations = n_iterations, n_tags = n_tags, 
                   transmission_interval = transmission_interval, 
                   transmission_length = transmission_length,
-                  blanking_interval = blanking_interval)
+                  blanking_interval = blanking_interval, 
+                  transmission_distribution = transmission_distribution)
+
