@@ -6,6 +6,10 @@
 #### discarded by a receiver due to interference from a
 #### variable number of other transmission sources. 
 
+#### Script outputs the percentage of transmissions that
+#### are not subject to interfeerence and are successfully
+#### detected by a receiver.
+
 
 #### Clearning Workspace and setting directory ---------
 rm(list=ls()) # Clear workspace
@@ -37,10 +41,10 @@ library('dplyr') # functions: between
     ## a lower supression value. Supression factor must be a factor of n_tags. 
     ## When determining supression values for a tag or set of tags, use a ratio from a range test equivilant to
     ##    Return rate of tag in similar condition / maximum return rate of test
-    supression_factor = .2
+    supression_factor = c(1, .97866, .74547) #, .10986, .00007, 0)
 
 #### Functions ------------------------------------------
-test_supression_factor = function(supression_factor = supression_factor, n_tags = n_tags){
+test_supression_factor = function(supression_factor, n_tags){
   ## A test of the supression factor. supression factor must be an integer, in which case it
     ## is constant for all tags, or a vector of a length which is a factor of the 
     ## total number of tags. 
@@ -144,38 +148,13 @@ generate_return_rates = function(transmission_df, collisions_supressed_df){
   return (indv_return_rate)
 }
 
-# 
-# test_collisions = function(transmission_array){
-#   ## Takes a transmission array dimensions (n_tags, n_iterations, 2) and tests
-#     ## against other transmission ranges for collisions
-#   all_detections = uncolided_detections = length(unique(transmission_array[ , ,1]))
-#   start_transmissions_vec = as.vector(unlist(
-#     alply(.data = transmission_array[ , ,1],
-#           .margins = c(1,2))))
-#   transmission_list = as.list(alply(.data = transmission_array, 
-#                                     .margins = c(1,2)))
-#   for (i in 1:length(transmission_list)){
-#     # subtracting the number of tranmsissions that begin during another tranmsision interval
-#       # have to add one becaue a transmission will test true with itself, but does not preclude
-#       # interfeer with itself
-#     uncolided_detections = (uncolided_detections 
-#                             - length(start_transmissions_vec[
-#                               between(start_transmissions_vec, 
-#                                       left = transmission_list[[i]][1], 
-#                                       right = transmission_list[[i]][2])]) 
-#                             + 1) # add one becaue a transmission will test true 
-#     # with itself, but does not interfeer with itself
-#   }
-#   fraction_of_transmissions_returned = uncolided_detections/all_detections
-#   return(fraction_of_transmissions_returned)
-# }
-
 run_simulation = function(n_iterations, n_tags, 
                           transmission_interval, 
                           transmission_length,
                           blanking_interval,
                           transmission_distribution){
   run_timer = proc.time()
+  test_supression_factor(supression_factor, n_tags)
   n_samples = generate_number_of_samples(transmission_distribution)
   pooled_return_rates = c()
   for (i in 1:length(n_iterations)){
@@ -192,14 +171,14 @@ run_simulation = function(n_iterations, n_tags,
   }
   mean_return_rates = colMeans(pooled_return_rates)
   proc.time() - run_timer
-  print(run_timer)
+  # print(run_timer)
+  print(mean_return_rates)
   return(mean_return_rates)
 }
 
 #### Usage ----------------------------------------
-test_run = run_simulation(n_iterations = n_iterations, n_tags = n_tags, 
-                  transmission_interval = transmission_interval, 
-                  transmission_length = transmission_length,
-                  blanking_interval = blanking_interval, 
-                  transmission_distribution = transmission_distribution)
-
+output = run_simulation(n_iterations = n_iterations, n_tags = n_tags, 
+                transmission_interval = transmission_interval, 
+                transmission_length = transmission_length,
+                blanking_interval = blanking_interval, 
+                transmission_distribution = transmission_distribution)
